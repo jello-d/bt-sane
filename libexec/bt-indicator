@@ -1,0 +1,516 @@
+#!/usr/bin/env python3
+"""bt-indicator - an SNI tray icon for Bluetooth, drawn in the same owned-tile
+language as mux-indicator / comms-indicator so the tray reads as one system. It
+replaces both blueman-applet (which busy-spins on the LE beacon flood) and the
+native waybar hw/bluetooth widget.
+
+PASSIVE + EVENT-DRIVEN: at startup it reads BlueZ's ObjectManager once, then
+subscribes to PropertiesChanged ONLY on the adapter + paired-device paths
+(path-scoped). It never runs discovery and never subscribes to the transient-
+device advertisement flood, so it sits at ~0% CPU even while Chrome holds an LE
+scan for passkeys (measured 0.00% idle, vs ~7% for blueman-applet). A slow
+re-enum (30s) catches pairing/unpairing. Clicks: LEFT connects/disconnects the
+primary device; MIDDLE toggles Bluetooth LE (off by default, on for a passkey --
+through the root bt-le helper, a narrow NOPASSWD grant); RIGHT opens blueman-
+manager. An amber top-left dot marks LE temporarily enabled.
+
+Deps: dbus-next + Pillow. BlueZ is on the SYSTEM bus; SNI on the SESSION bus.
+`bt-indicator render-test DIR` dumps preview PNGs (no D-Bus).
+"""
+import asyncio
+import os
+import sys
+
+from PIL import Image, ImageDraw, ImageFont
+
+# Blueman-style: a BLUE rounded tile with a white Bluetooth rune (thinner than
+# the old bar widget), the rune turning CYAN when a device is connected; dim
+# grey when BT is off. NARROWER than the square mux/comms tiles (snug on the
+# rune). FILL is the tile body; RUNE is the foreground glyph.
+_ASPECT = 0.72     # tile width / height (narrower than square)
+FILL = {
+    "off":       (0x36, 0x38, 0x40, 0xFF),   # dim grey (BT off)
+    "on":        (0x1C, 0x56, 0xD2, 0xFF),   # blueman blue
+    "connected": (0x1C, 0x56, 0xD2, 0xFF),   # same blue; rune goes cyan
+}
+RUNE = {
+    "off":       (0x86, 0x88, 0x90, 0xFF),   # grey
+    "on":        (0xF4, 0xF7, 0xFF, 0xFF),   # white
+    "connected": (0x46, 0xE8, 0xFF, 0xFF),   # cyan
+}
+_BATT = (0x6C, 0xE6, 0xFF, 0xFF)           # battery badge, normal (light cyan)
+_BATT_LOW = (0xF0, 0x92, 0x28, 0xFF)       # battery badge, <=20% (orange)
+_BADGE_INK = (0x0C, 0x1E, 0x34, 0xFF)      # dark number on the bright badge
+_LE_ON = (0xFF, 0xB0, 0x2E, 0xFF)          # amber LE-enabled dot (top-left)
+_SHADOW = (0, 0, 0, 120)
+_BADGE_F = 0.52    # battery badge diameter (fraction of tile height)
+_NUM = 0.92        # badge number size vs badge
+
+_SANS = ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf")
+
+
+def _font(px):
+    for p in _SANS:
+        try:
+            return ImageFont.truetype(p, px)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def _darker(c, f):
+    return tuple(int(c[i] * f) for i in range(3)) + (0xFF,)
+
+
+def _rune(d, cx, s, col):
+    # The Bluetooth rune as one continuous polyline, thin + CRISP: no soft
+    # keyline halo (white/cyan on blue is already high-contrast), just the one
+    # hard-edged stroke. A drop taller than before. cx = centre, s = height.
+    cy = s * 0.5
+    rh = s * 0.60
+    hh, hw = rh * 0.5, rh * 0.30
+    pts = [(cx - hw, cy - hh * 0.5), (cx + hw, cy + hh * 0.5), (cx, cy + hh),
+           (cx, cy - hh), (cx + hw, cy - hh * 0.5), (cx - hw, cy + hh * 0.5)]
+    lw = max(2, int(round(s * 0.055)))
+    d.line(pts, fill=col, width=lw, joint="curve")
+
+
+def _badge(img, x1, s, pct):
+    # Battery-percent badge overhanging the tile's top-right (mux badge idiom).
+    bd = int(s * _BADGE_F)
+    bx0 = x1 - bd
+    box = [bx0, -1, x1 - 1, bd - 1]
+    off = max(1, s // 22)
+    shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).ellipse(
+        [bx0 + off, -1 + off, x1 - 1 + off, bd - 1 + off], fill=_SHADOW)
+    img.alpha_composite(shadow)
+    d = ImageDraw.Draw(img)
+    fill = _BATT_LOW if pct <= 20 else _BATT
+    d.ellipse(box, fill=fill, outline=_darker(fill, 0.6), width=max(1, s // 30))
+    txt = str(pct)
+    fnt = _font(max(6, int(bd * _NUM)))
+    _, t, _, b = d.textbbox((0, 0), txt, font=fnt)
+    tw = d.textlength(txt, font=fnt)
+    tx = bx0 + (bd - tw) / 2
+    ty = box[1] + (bd - (b - t)) / 2 - t
+    d.text((tx, ty), txt, font=fnt, fill=_BADGE_INK)
+
+
+def _le_dot(img, s):
+    # Small amber dot marking LE (Low Energy) temporarily ENABLED -- a reminder
+    # to flip it back off (default is off). Top-LEFT, away from the badge.
+    dd = int(s * 0.34)
+    d = ImageDraw.Draw(img)
+    d.ellipse([1, 1, dd, dd], fill=_LE_ON,
+              outline=_darker(_LE_ON, 0.55), width=max(1, s // 30))
+
+
+def _tile(state, pct, h, le=False):
+    w = max(1, int(round(h * _ASPECT)))
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    fill = FILL.get(state, FILL["off"])
+    d.rounded_rectangle([0, 0, w - 1, h - 1], max(2, h // 7),
+                        fill=fill, outline=_darker(fill, 0.62),
+                        width=max(1, h // 12))
+    _rune(d, w / 2.0, h, RUNE.get(state, RUNE["off"]))
+    if state == "connected" and pct is not None:
+        _badge(img, w, h, pct)
+    if le:
+        _le_dot(img, h)
+    return img
+
+
+def _to_argb(img):
+    rgba = img.tobytes("raw", "RGBA")
+    out = bytearray(len(rgba))
+    for i in range(0, len(rgba), 4):
+        out[i] = rgba[i + 3]
+        out[i + 1] = rgba[i]
+        out[i + 2] = rgba[i + 1]
+        out[i + 3] = rgba[i + 2]
+    return bytes(out)
+
+
+def icon_pixmap(state, pct, le=False, sizes=(22, 32, 48)):
+    out = []
+    for h in sizes:
+        img = _tile(state, pct, h, le)
+        out.append([img.width, img.height, _to_argb(img)])
+    return out
+
+
+def _render_test(outdir):
+    os.makedirs(outdir, exist_ok=True)
+    cases = [("off", None, False), ("on", None, False),
+             ("connected", None, False), ("connected", 72, False),
+             ("connected", 15, False), ("on", None, True),
+             ("connected", 72, True)]
+    s = 32                     # actual tray height -> true pixels
+    gap = 4
+    tw = int(round(s * _ASPECT))
+    sheet = Image.new("RGBA", ((tw + gap) * len(cases) + gap, s + 2 * gap),
+                      (40, 40, 46, 255))
+    x = gap
+    for st, pct, le in cases:
+        t = _tile(st, pct, s, le)
+        sheet.paste(t, (x, gap), t)
+        x += tw + gap
+    z = 7                      # magnify NEAREST so real pixels are visible
+    sheet = sheet.resize((sheet.width * z, sheet.height * z), Image.NEAREST)
+    p = os.path.join(outdir, "bt-states.png")
+    sheet.save(p)
+    print(p)
+
+
+# --- BlueZ (system bus): read adapter power + paired-device connect/battery ---
+BLUEZ = "org.bluez"
+OM_IFACE = "org.freedesktop.DBus.ObjectManager"
+
+
+async def read_state(om):
+    """Return (state, pct, alias, primary_path, watch_paths). One
+    GetManagedObjects call on a CACHED ObjectManager proxy. watch_paths is the
+    adapter + every PAIRED device path -- the only paths we subscribe to, so we
+    never touch the transient-device advertisement flood."""
+    if om is None:
+        return ("off", None, "", None, set())
+    try:
+        managed = await om.call_get_managed_objects()
+    except Exception:
+        return ("off", None, "", None, set())
+    have_adapter = powered = connected = False
+    pct = None
+    alias = ""
+    primary = None
+    first_paired = None
+    watch = set()
+    for path, ifaces in managed.items():
+        if "org.bluez.Adapter1" in ifaces:
+            have_adapter = True
+            watch.add(path)
+            p = ifaces["org.bluez.Adapter1"].get("Powered")
+            if p is not None and p.value:
+                powered = True
+        dev = ifaces.get("org.bluez.Device1")
+        if dev is not None:
+            paired = dev.get("Paired")
+            if paired is not None and paired.value:
+                watch.add(path)
+                if first_paired is None:
+                    first_paired = path
+            conn = dev.get("Connected")
+            if conn is not None and conn.value:
+                connected = True
+                primary = path
+                a = dev.get("Alias")
+                alias = a.value if a is not None else ""
+                bat = ifaces.get("org.bluez.Battery1")
+                if bat is not None and "Percentage" in bat:
+                    pct = int(bat["Percentage"].value)
+    if not have_adapter or not powered:
+        return ("off", None, "", None, watch)
+    if connected:
+        return ("connected", pct, alias, primary, watch)
+    return ("on", None, "", first_paired, watch)
+
+
+async def toggle(sysbus, state, path):
+    """Left-click action: disconnect the connected device, else connect the
+    first paired one."""
+    if path is None:
+        return
+    try:
+        intro = await sysbus.introspect(BLUEZ, path)
+        dev = sysbus.get_proxy_object(BLUEZ, path, intro) \
+            .get_interface("org.bluez.Device1")
+        if state == "connected":
+            await dev.call_disconnect()
+        else:
+            await dev.call_connect()
+    except Exception as e:
+        print(f"bt-indicator: toggle failed: {e}", flush=True)
+
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "render-test":
+        _render_test(sys.argv[2] if len(sys.argv) > 2 else "/tmp/bt-test")
+        return
+    asyncio.run(run())
+
+
+# --- SNI service (session bus) ----------------------------------------------
+async def run():
+    from dbus_next import BusType, PropertyAccess
+    from dbus_next.aio import MessageBus
+    from dbus_next.service import (ServiceInterface, dbus_property, method,
+                                   signal)
+
+    WATCHER = "org.kde.StatusNotifierWatcher"
+    WATCHER_PATH = "/StatusNotifierWatcher"
+    ITEM_PATH = "/StatusNotifierItem"
+    # seams: the integrator installs bt-le to a root path (a narrow NOPASSWD
+    # grant) and points these here; defaults match the common install.
+    BT_LE = os.environ.get("BT_LE", "/usr/local/sbin/bt-le")
+    BT_CONF = os.environ.get("BT_CONF", "/etc/bluetooth/main.conf")
+
+    def le_is_on():
+        # LE state = ControllerMode in main.conf (dual/le -> on): a plain read
+        # a world-readable file -- no subprocess, no root, cannot hang. bt-le's
+        # on/off rewrite this line + restart bluetoothd, so it is the single
+        # source of truth for the state.
+        try:
+            with open(BT_CONF) as f:
+                for line in f:
+                    s = line.strip()
+                    if s.startswith("ControllerMode"):
+                        return s.split("=", 1)[1].strip() in ("dual", "le")
+        except Exception:
+            pass
+        return False
+
+    async def spawn(*argv):
+        try:
+            await asyncio.create_subprocess_exec(
+                *argv, stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL)
+        except Exception as e:
+            print(f"bt-indicator: spawn {argv[0]}: {e}", flush=True)
+
+    sysbus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+    bus = await MessageBus(bus_type=BusType.SESSION).connect()
+
+    om = None
+    try:
+        bz = await sysbus.introspect(BLUEZ, "/")
+        om = sysbus.get_proxy_object(BLUEZ, "/", bz).get_interface(OM_IFACE)
+    except Exception as e:
+        print(f"bt-indicator: bluez unavailable: {e}", flush=True)
+
+    class Indicator(ServiceInterface):
+        def __init__(self):
+            super().__init__("org.kde.StatusNotifierItem")
+            self._state = "off"
+            self._pct = None
+            self._alias = ""
+            self._path = None
+            self._le = False
+            self._toggling = False
+            self._pixmap = icon_pixmap(self._state, self._pct, self._le)
+
+        def set(self, state, pct, alias, path):
+            self._state, self._pct = state, pct
+            self._alias, self._path = alias, path
+            self._pixmap = icon_pixmap(state, pct, self._le)
+            self.NewIcon()
+            self.NewStatus(self._status())
+
+        def set_le(self, le):
+            if le == self._le:
+                return                  # no redundant repaint (the zoom recaps)
+            self._le = le
+            self._pixmap = icon_pixmap(self._state, self._pct, le)
+            self.NewIcon()
+
+        def _status(self):
+            # Always Active: the tile never hides, so the tray width is constant
+            # and never reflows -- notably across the brief bluetoothd restart
+            # an LE toggle triggers. A grey tile already shows the BT-off state.
+            return "Active"
+
+        @dbus_property(access=PropertyAccess.READ)
+        def Category(self) -> "s":
+            return "Hardware"
+
+        @dbus_property(access=PropertyAccess.READ)
+        def Id(self) -> "s":
+            return "bt-indicator"
+
+        @dbus_property(access=PropertyAccess.READ)
+        def Title(self) -> "s":
+            return "bluetooth"
+
+        @dbus_property(access=PropertyAccess.READ)
+        def Status(self) -> "s":
+            return self._status()
+
+        @dbus_property(access=PropertyAccess.READ)
+        def IconName(self) -> "s":
+            return ""
+
+        @dbus_property(access=PropertyAccess.READ)
+        def IconPixmap(self) -> "a(iiay)":
+            return self._pixmap
+
+        @dbus_property(access=PropertyAccess.READ)
+        def OverlayIconName(self) -> "s":
+            return ""
+
+        @dbus_property(access=PropertyAccess.READ)
+        def AttentionIconName(self) -> "s":
+            return ""
+
+        @dbus_property(access=PropertyAccess.READ)
+        def AttentionIconPixmap(self) -> "a(iiay)":
+            return self._pixmap
+
+        @dbus_property(access=PropertyAccess.READ)
+        def ToolTip(self) -> "(sa(iiay)ss)":
+            if self._state == "connected" and self._alias:
+                body = self._alias + (f"  {self._pct}%" if self._pct
+                                      is not None else "")
+            elif self._state == "off":
+                body = "off"
+            else:
+                body = "on (no device)"
+            body += f"  ·  LE {'on' if self._le else 'off'}"
+            return ["", [], "Bluetooth", body]
+
+        @dbus_property(access=PropertyAccess.READ)
+        def ItemIsMenu(self) -> "b":
+            return False
+
+        @method()
+        def Activate(self, x: "i", y: "i"):
+            # Left-click: connect/disconnect the primary paired device.
+            asyncio.get_event_loop().create_task(self._do())
+
+        @method()
+        def SecondaryActivate(self, x: "i", y: "i"):
+            # Middle-click: toggle LE (off by default; on for passkeys).
+            asyncio.get_event_loop().create_task(self._toggle_le())
+
+        @method()
+        def ContextMenu(self, x: "i", y: "i"):
+            # Right-click (waybar calls ContextMenu when there is no dbusmenu):
+            # open blueman-manager for pairing.
+            asyncio.get_event_loop().create_task(spawn("blueman-manager"))
+
+        @method()
+        def Scroll(self, delta: "i", orientation: "s"):
+            pass
+
+        async def _do(self):
+            await toggle(sysbus, self._state, self._path)
+            await refresh(self)
+
+        async def _toggle_le(self):
+            # on/off rewrite main.conf + restart bluetoothd (~1-2s). Keep the
+            # connection-state readout FROZEN until the adapter is back, so the
+            # resync never reads a transient "off" -- that grey-tile flash is
+            # invisible in the tray but the hover-zoom magnifies it. Only the LE
+            # dot changes meanwhile.
+            target = "off" if self._le else "on"
+            self._toggling = True
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "sudo", "-n", BT_LE, target,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL)
+                await asyncio.wait_for(proc.wait(), timeout=20)
+                for _ in range(24):        # wait up to ~6s for bluez to return
+                    st, *_rest = await read_state(om)
+                    if st != "off":
+                        break
+                    await asyncio.sleep(0.25)
+            except Exception as e:
+                print(f"bt-indicator: LE {target}: {e}", flush=True)
+            finally:
+                self._toggling = False
+            # The restart tore down our path-scoped subscriptions (they matched
+            # the old bluetoothd); drop them so refresh re-subscribes afresh.
+            subscribed.clear()
+            self.set_le(le_is_on())
+            print(f"bt-indicator: LE now {'on' if self._le else 'off'}",
+                  flush=True)
+            await refresh(self)
+
+        @signal()
+        def NewIcon(self):
+            pass
+
+        @signal()
+        def NewStatus(self, status) -> "s":
+            return status
+
+    subscribed = set()
+
+    async def subscribe(path):
+        # Path-scoped PropertiesChanged subscription -> only the adapter + our
+        # paired devices wake us; transient discovered devices never do.
+        if path in subscribed:
+            return
+        subscribed.add(path)
+        try:
+            intro = await sysbus.introspect(BLUEZ, path)
+            props = sysbus.get_proxy_object(BLUEZ, path, intro) \
+                .get_interface("org.freedesktop.DBus.Properties")
+            props.on_properties_changed(
+                lambda i, c, v:
+                asyncio.get_event_loop().create_task(refresh(item)))
+        except Exception as e:
+            subscribed.discard(path)
+            print(f"bt-indicator: watch {path}: {e}", flush=True)
+
+    async def refresh(item):
+        le = le_is_on()
+        if le != item._le:
+            item.set_le(le)             # keep the LE dot honest (cheap read)
+        if item._toggling:
+            return  # freeze connection state across the toggle restart
+        st, pct, alias, path, watch = await read_state(om)
+        for p in watch:
+            await subscribe(p)          # pick up newly-paired devices
+        if (st, pct, path) != (item._state, item._pct, item._path):
+            item.set(st, pct, alias, path)
+            print(f"bt-indicator: {st} {alias} {pct}", flush=True)
+
+    async def reenum(item):
+        # Slow safety net: catch pairing/unpairing (new paths to watch) and any
+        # missed change. Idle cost is one GetManagedObjects per POLL_REENUM.
+        while True:
+            await asyncio.sleep(float(os.environ.get("BT_INDICATOR_REENUM",
+                                                     "30")))
+            await refresh(item)
+
+    item = Indicator()
+    bus.export(ITEM_PATH, item)
+    name = f"org.kde.StatusNotifierItem-{os.getpid()}-1"
+    await bus.request_name(name)
+
+    async def register():
+        try:
+            intro = await bus.introspect(WATCHER, WATCHER_PATH)
+            w = bus.get_proxy_object(WATCHER, WATCHER_PATH, intro) \
+                .get_interface(WATCHER)
+            await w.call_register_status_notifier_item(name)
+            print(f"bt-indicator: registered {name}", flush=True)
+        except Exception as e:
+            print(f"bt-indicator: register failed: {e}", flush=True)
+
+    di = await bus.introspect("org.freedesktop.DBus", "/org/freedesktop/DBus")
+    dbus = bus.get_proxy_object("org.freedesktop.DBus", "/org/freedesktop/DBus",
+                                di).get_interface("org.freedesktop.DBus")
+
+    def on_owner(n, old, new):
+        if n == WATCHER and new:
+            asyncio.get_event_loop().create_task(register())
+    dbus.on_name_owner_changed(on_owner)
+
+    try:
+        owner = await dbus.call_get_name_owner(WATCHER)
+    except Exception:
+        owner = ""
+    if owner:
+        await register()
+    else:
+        print("bt-indicator: waiting for the tray watcher", flush=True)
+    await refresh(item)
+    asyncio.create_task(reenum(item))
+    await asyncio.get_event_loop().create_future()
+
+
+if __name__ == "__main__":
+    main()

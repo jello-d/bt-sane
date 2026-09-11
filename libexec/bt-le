@@ -1,0 +1,37 @@
+#!/bin/sh
+# bt-le -- flip the controller's Bluetooth LE on/off, or report it.
+#
+# btmgmt (the runtime mgmt API) is NOT usable on this box: it HANGS when run
+# without a tty (the tray daemon has none), and it refuses `le off` with status
+# 0x0a (Busy) whenever the controller is active -- so it cannot reliably turn LE
+# OFF, the direction that matters most. So the toggle drives the DURABLE knob:
+# ControllerMode in /etc/bluetooth/main.conf, then a bluetoothd restart, which
+# reliably enables (dual) or disables (bredr) LE. main.conf is the single source
+# of truth for the state (and is world-readable, so `status` needs no root and
+# never hangs). bredr (LE off) is the boot default (modules/bluetooth); this
+# flips to dual for a passkey, then back off.
+#
+# on/off need root (edit /etc + restart bluetoothd); status is a plain read. The
+# Bluetooth tray indicator drives on/off through a narrow NOPASSWD grant.
+set -eu
+
+CONF=${CONF:-/etc/bluetooth/main.conf}
+BT_UNIT=${BT_UNIT:-bluetooth}
+CM_RE='^[[:space:]]*ControllerMode[[:space:]]*='
+
+set_mode() {   # $1 = bredr | dual
+  # main.conf always carries exactly one canonical ControllerMode line
+  # (modules/bluetooth guarantees it); rewrite it and re-init the controller.
+  sed -i "s|$CM_RE.*|ControllerMode = $1|" "$CONF"
+  systemctl restart "$BT_UNIT"
+}
+
+case "${1:-}" in
+  on)  set_mode dual  ;;
+  off) set_mode bredr ;;
+  status)
+    m=$(grep -E "$CM_RE" "$CONF" 2>/dev/null | tail -1 \
+        | sed 's/.*=[[:space:]]*//; s/[[:space:]]*$//')
+    case "$m" in dual | le) echo on ;; *) echo off ;; esac ;;
+  *) echo "usage: bt-le on|off|status" >&2; exit 2 ;;
+esac

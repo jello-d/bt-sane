@@ -1,0 +1,68 @@
+.TH BT-SANE 1 "2026" "bt-sane" "User Commands"
+.SH NAME
+bt-sane \- a saner Bluetooth desktop: a passive tray icon + an LE toggle
+.SH DESCRIPTION
+.B bt-sane
+is a small Bluetooth-UX suite: a passive, event-driven tray indicator that
+replaces the CPU-hungry blueman-applet, and a controller-mode toggle. It is a
+suite of tools installed on
+.BR PATH ;
+there is no eponymous
+.B bt-sane
+command.
+.SH TOOLS
+.TP
+.B bt-indicator
+A passive StatusNotifierItem tray icon for Bluetooth. It reads BlueZ once on the
+system bus and subscribes to PropertiesChanged only on the adapter + paired
+devices (never the LE advertisement flood), so it sits at ~0% idle. Left-click
+connects/disconnects the last paired device, middle-click toggles LE (via
+.BR bt-le ),
+right-click opens
+.BR blueman-manager .
+Runs as a
+.B --user
+systemd daemon (installed by
+.BR "setup.sh service" ).
+.TP
+.B bt-le
+.B "bt-le on|off|status"
+\(em flip the BlueZ
+.I ControllerMode
+between
+.B dual
+(LE on) and
+.B bredr
+(classic only), restarting bluetoothd.
+.B status
+is world-readable;
+.BR on / off
+edit
+.I /etc/bluetooth/main.conf
+and need root (an integrator installs bt-le to a root path with a narrow
+NOPASSWD grant, which is how the tray's middle-click reaches it).
+.SH RATIONALE
+BlueZ defaults to
+.B dual
+mode; in an RF-dense room LE discovery floods blueman-applet with hundreds of
+transient beacons and it busy-spins a CPU.
+.B bredr
+costs nothing when all your gear is classic audio, and
+.B bt-le
+flips back for a session that needs LE. The tray icon is passive by
+construction, so it never spins.
+.SH ENVIRONMENT
+.TP
+.B BT_LE
+path to the bt-le helper the tray invokes via sudo (default
+.IR /usr/local/sbin/bt-le ).
+.TP
+.B BT_CONF
+the BlueZ main.conf path (default
+.IR /etc/bluetooth/main.conf ).
+.TP
+.B BT_INDICATOR_REENUM
+re-enumeration interval tuning for the tray.
+.SH SEE ALSO
+.BR bluetoothctl (1),
+.BR blueman-manager (1)
