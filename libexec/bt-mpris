@@ -1,0 +1,57 @@
+#!/bin/sh
+# bt-mpris -- turn bluez's MPRIS<->AVRCP bridge off, or report it.
+#
+# Sibling of bt-le, and the same kind of knob: this suite exists so the costly
+# parts of Bluetooth can be turned OFF and back on deliberately, rather than
+# left running because nobody noticed them. bt-le handles LE; this handles
+# mpris-proxy, which busy-loops roughly a THIRD OF A CORE in every user manager
+# it starts in -- including headless service accounts that will never play a
+# note through a headset.
+#
+# WHICH KNOB, AND WHY THIS ONE. mpris-proxy is a --user unit shipped by bluez
+# and started per session, so `systemctl --user disable` in one session fixes
+# only that session. The durable, box-wide lever is a mask in the SYSTEM-WIDE
+# user unit directory (/etc/systemd/user), which every user manager reads.
+#
+# STATUS IS THREE-VALUED on purpose, because masking does NOT stop a unit that
+# is already running:
+#   off    masked, and nothing running        (what you asked for)
+#   stale  masked, but an instance is LIVE    (still burning CPU until logout)
+#   on     not masked                         (bridge available)
+# Collapsing `stale` into `off` is what lets a busy-loop hide behind a green
+# check: the declaration is right and the machine is still hot.
+#
+# status is a plain read (no root, no tty, cannot hang). off/on write /etc and
+# so need root; an integrator drives them through its own privileged path.
+set -eu
+
+MASK=${MASK:-/etc/systemd/user/mpris-proxy.service}
+UNIT=${UNIT:-mpris-proxy.service}
+
+_masked() { [ "$(readlink "$MASK" 2>/dev/null)" = /dev/null ]; }
+
+# `systemctl --user` needs a user manager to answer. In a context that has none
+# (a build, a root shell, a container) treat it as not running rather than
+# failing: absence of a manager is absence of the busy-loop.
+_running() {
+  [ "$(systemctl --user is-active "$UNIT" 2>/dev/null || true)" = active ]
+}
+
+case "${1:-}" in
+  off)
+    mkdir -p "$(dirname "$MASK")"
+    ln -sfn /dev/null "$MASK"
+    # Stop any LIVE instance too. Masking only governs the next start, and the
+    # whole point of this command is that the CPU stops now, not at logout.
+    systemctl --user stop "$UNIT" >/dev/null 2>&1 || true
+    ;;
+  on)
+    if _masked; then rm -f "$MASK"; fi
+    ;;
+  status)
+    if ! _masked; then echo on
+    elif _running; then echo stale
+    else echo off; fi
+    ;;
+  *) echo "usage: bt-mpris off|on|status" >&2; exit 2 ;;
+esac

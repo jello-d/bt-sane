@@ -56,10 +56,11 @@ _man_pages() { for _m in "$_root"/man/man*/*.[0-9]; do
 do_install() {
   mkdir -p "$_bin"
   ln -sfn "$_root/libexec/bt-le" "$_bin/bt-le"
+  ln -sfn "$_root/libexec/bt-mpris" "$_bin/bt-mpris"
   _man_pages | while IFS= read -r _m; do
     _d=$_man/$(basename "$(dirname "$_m")")
     mkdir -p "$_d"; ln -sfn "$_m" "$_d/$(basename "$_m")"; done
-  echo "$PKG: linked bt-le (+ man) into $PREFIX"
+  echo "$PKG: linked bt-le, bt-mpris (+ man) into $PREFIX"
 }
 
 do_service() {
@@ -85,7 +86,7 @@ EOF
 }
 
 do_uninstall() {
-  for _l in "$_bin/bt-le" "$_bin/bt-indicator"; do
+  for _l in "$_bin/bt-le" "$_bin/bt-mpris" "$_bin/bt-indicator"; do
     [ -e "$_l" ] && rm -f "$_l" || :; done
   _man_pages | while IFS= read -r _m; do
     _l=$_man/$(basename "$(dirname "$_m")")/$(basename "$_m")
@@ -100,9 +101,24 @@ do_uninstall() {
 
 do_check() {
   echo "== $PKG (bluetooth tray + LE toggle) =="
-  if [ "$(readlink "$_bin/bt-le" 2>/dev/null)" = "$_root/libexec/bt-le" ]; then
-    ok "bt-le linked"
-  else bad "bt-le not linked ($_bin/bt-le)"; fi
+  for _t in bt-le bt-mpris; do
+    if [ "$(readlink "$_bin/$_t" 2>/dev/null)" = "$_root/libexec/$_t" ]; then
+      ok "$_t linked"
+    else bad "$_t not linked ($_bin/$_t)"; fi
+  done
+  # The CAPABILITY, reported but never judged. Whether LE or the MPRIS bridge
+  # SHOULD be on is the integrator's policy, not this package's: bt-sane exists
+  # so both can be turned off deliberately, and a box that wants the bridge is
+  # not broken. So state is surfaced for whoever does hold the policy, and only
+  # `stale` is called out -- masked-but-still-running is nobody's intent, it is
+  # just a mask that has not taken effect yet.
+  _m=$("$_root/libexec/bt-mpris" status 2>/dev/null || echo unknown)
+  case "$_m" in
+    stale) bad "mpris-proxy masked but STILL RUNNING (~1/3 core until the
+         session ends; \`bt-mpris off\` stops it now)" ;;
+    *)     ok "mpris bridge: $_m" ;;
+  esac
+  ok "LE: $("$_root/libexec/bt-le" status 2>/dev/null || echo unknown)"
   for _d in $DEPS; do
     command -v "$_d" >/dev/null 2>&1 && ok "dep $_d present" \
       || warn "dep $_d absent (bluez -- the suite needs it)"; done
