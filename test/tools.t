@@ -2,7 +2,7 @@
 # tools.t - every shipped script PARSES under its own shell (dash for POSIX sh,
 # python for the daemon, bash for bash scripts), dispatched by shebang. Data
 # files (*.reqs) are skipped. A parse error ships a broken command.
-. "$(dirname "$0")/lib.sh"
+. "$(dirname "$0")/harness_lib"
 harness_init tools
 
 _checker() {   # <file> -> the -n syntax check for its shebang

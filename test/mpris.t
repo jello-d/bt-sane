@@ -16,7 +16,7 @@
 # policy (tackup masks it fleet-wide), and a box that wants the bridge is not
 # broken. This package owns the CAPABILITY -- flipping it, and telling the truth
 # about it.
-. "$(dirname "$0")/lib.sh"
+. "$(dirname "$0")/harness_lib"
 harness_init mpris
 
 TOOL=$HERE/libexec/bt-mpris

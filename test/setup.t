@@ -4,7 +4,7 @@
 # scratch dir. The `service` verb is NOT exercised: it builds a real venv and
 # reaches the live --user manager (systemctl --user enable), neither of which
 # belongs in a stub test (the vigilance/hush precedent).
-. "$(dirname "$0")/lib.sh"
+. "$(dirname "$0")/harness_lib"
 harness_init setup
 
 PREFIX=$T/local
