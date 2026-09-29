@@ -14,7 +14,7 @@
 #
 # Whether the bridge SHOULD be on is not asserted here: that is the integrator's
 # policy (tackup masks it fleet-wide), and a box that wants the bridge is not
-# broken. This package owns the CAPABILITY -- flipping it, and telling the truth
+# broken. This package owns the CAPABILITY: flipping it, and telling the truth
 # about it.
 . "$(dirname "$0")/harness_lib"
 harness_init mpris

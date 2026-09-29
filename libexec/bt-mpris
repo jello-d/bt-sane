@@ -1,11 +1,11 @@
 #!/bin/sh
-# bt-mpris -- turn bluez's MPRIS<->AVRCP bridge off, or report it.
+# bt-mpris: turn bluez's MPRIS<->AVRCP bridge off, or report it.
 #
 # Sibling of bt-le, and the same kind of knob: this suite exists so the costly
 # parts of Bluetooth can be turned OFF and back on deliberately, rather than
 # left running because nobody noticed them. bt-le handles LE; this handles
 # mpris-proxy, which busy-loops roughly a THIRD OF A CORE in every user manager
-# it starts in -- including headless service accounts that will never play a
+# it starts in, including headless service accounts that will never play a
 # note through a headset.
 #
 # WHICH KNOB, AND WHY THIS ONE. mpris-proxy is a --user unit shipped by bluez

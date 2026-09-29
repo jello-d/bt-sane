@@ -15,8 +15,9 @@
 # provisioner delegates to); the tray icon is a Python/dbus daemon, so it is a
 # separate `service` verb (builds a venv, no venv-run dependency). bt-le is a
 # ROOT helper in use (it edits /etc/bluetooth/main.conf + restarts bluetooth);
-# `install` links it for `bt-le status` by hand -- an integrator installs it to
-# a root path with a narrow NOPASSWD grant (that privileged step is not here).
+# `install` links it for `bt-le status` by hand, whereas an integrator
+# installs it to a root path with a narrow NOPASSWD grant (that privileged
+# step is not here).
 set -eu
 
 PKG=bt-sane
@@ -110,8 +111,8 @@ do_check() {
   # SHOULD be on is the integrator's policy, not this package's: bt-sane exists
   # so both can be turned off deliberately, and a box that wants the bridge is
   # not broken. So state is surfaced for whoever does hold the policy, and only
-  # `stale` is called out -- masked-but-still-running is nobody's intent, it is
-  # just a mask that has not taken effect yet.
+  # `stale` is called out because masked-but-still-running is nobody's
+  # intent, it is just a mask that has not taken effect yet.
   _m=$("$_root/libexec/bt-mpris" status 2>/dev/null || echo unknown)
   case "$_m" in
     stale) bad "mpris-proxy masked but STILL RUNNING (~1/3 core until the

@@ -99,7 +99,7 @@ def _badge(img, x1, s, pct):
 
 
 def _le_dot(img, s):
-    # Small amber dot marking LE (Low Energy) temporarily ENABLED -- a reminder
+    # Small amber dot marking LE (Low Energy) temporarily ENABLED, a reminder
     # to flip it back off (default is off). Top-LEFT, away from the badge.
     dd = int(s * 0.34)
     d = ImageDraw.Draw(img)
@@ -258,7 +258,7 @@ async def run():
 
     def le_is_on():
         # LE state = ControllerMode in main.conf (dual/le -> on): a plain read
-        # a world-readable file -- no subprocess, no root, cannot hang. bt-le's
+        # a world-readable file: no subprocess, no root, cannot hang. bt-le's
         # on/off rewrite this line + restart bluetoothd, so it is the single
         # source of truth for the state.
         try:
@@ -316,7 +316,7 @@ async def run():
 
         def _status(self):
             # Always Active: the tile never hides, so the tray width is constant
-            # and never reflows -- notably across the brief bluetoothd restart
+            # and never reflows, notably across the brief bluetoothd restart
             # an LE toggle triggers. A grey tile already shows the BT-off state.
             return "Active"
 
@@ -399,7 +399,7 @@ async def run():
         async def _toggle_le(self):
             # on/off rewrite main.conf + restart bluetoothd (~1-2s). Keep the
             # connection-state readout FROZEN until the adapter is back, so the
-            # resync never reads a transient "off" -- that grey-tile flash is
+            # resync never reads a transient "off"; that grey-tile flash is
             # invisible in the tray but the hover-zoom magnifies it. Only the LE
             # dot changes meanwhile.
             target = "off" if self._le else "on"

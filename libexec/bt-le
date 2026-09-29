@@ -1,9 +1,9 @@
 #!/bin/sh
-# bt-le -- flip the controller's Bluetooth LE on/off, or report it.
+# bt-le: flip the controller's Bluetooth LE on/off, or report it.
 #
 # btmgmt (the runtime mgmt API) is NOT usable on this box: it HANGS when run
 # without a tty (the tray daemon has none), and it refuses `le off` with status
-# 0x0a (Busy) whenever the controller is active -- so it cannot reliably turn LE
+# 0x0a (Busy) whenever the controller is active, so it cannot reliably turn LE
 # OFF, the direction that matters most. So the toggle drives the DURABLE knob:
 # ControllerMode in /etc/bluetooth/main.conf, then a bluetoothd restart, which
 # reliably enables (dual) or disables (bredr) LE. main.conf is the single source
