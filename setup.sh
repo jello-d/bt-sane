@@ -122,7 +122,7 @@ do_check() {
   ok "LE: $("$_root/libexec/bt-le" status 2>/dev/null || echo unknown)"
   for _d in $DEPS; do
     command -v "$_d" >/dev/null 2>&1 && ok "dep $_d present" \
-      || warn "dep $_d absent (bluez -- the suite needs it)"; done
+      || warn "dep $_d absent (bluez; the suite needs it)"; done
   for _d in $DEPS_SOFT; do
     command -v "$_d" >/dev/null 2>&1 && ok "dep $_d present" \
       || warn "dep $_d absent (a feature degrades)"; done
