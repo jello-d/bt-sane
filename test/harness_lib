@@ -8,8 +8,17 @@
 harness_init() {   # <name>
   TEST_NAME=$1
   HERE=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-  T=$(mktemp -d)
-  trap 'rm -rf "$T"' EXIT INT TERM
+  # The scratch dir is CHECKED, then its literal baked into the trap when it
+  # is armed: a deferred `rm -rf "$T"` deletes whatever T holds at exit, and
+  # an empty or wrong value there is how mux's harness removed its own repo.
+  T=$(mktemp -d) || :
+  case $T in
+  /?*) [ -d "$T" ] || { echo "harness: mktemp gave '$T'" >&2; exit 1; } ;;
+  *) echo "harness: mktemp -d failed (TMPDIR=${TMPDIR:-})" >&2; exit 1 ;;
+  esac
+  _C="'$T'"
+  # shellcheck disable=SC2064
+  trap "rm -rf $_C" EXIT INT TERM
 }
 pass() { printf 'ok   %s%s\n' "$TEST_NAME" "${1:+ ($1)}"; }
 fail() { printf 'FAIL %s: %s\n' "$TEST_NAME" "$1" >&2; exit 1; }
