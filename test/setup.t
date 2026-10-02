@@ -10,7 +10,12 @@ harness_init setup
 PREFIX=$T/local
 XDG_BIN_HOME=$PREFIX/bin
 XDG_DATA_HOME=$PREFIX/share
-export PREFIX XDG_BIN_HOME XDG_DATA_HOME
+# CONFIG AND HOME TOO: `uninstall` disables and deletes the --user unit under
+# $XDG_CONFIG_HOME, so without these the roundtrip stopped and removed the
+# LIVE tray daemon on whatever box ran the suite.
+XDG_CONFIG_HOME=$T/config
+HOME=$T/home
+export PREFIX XDG_BIN_HOME XDG_DATA_HOME XDG_CONFIG_HOME HOME
 
 sh "$HERE/setup.sh" install >/dev/null || fail "install errored"
 [ -L "$XDG_BIN_HOME/bt-le" ] || fail "bt-le not linked"
