@@ -20,9 +20,9 @@
 # step is not here).
 #
 # THE PAYLOAD (the fleet's place-not-link rule, 2026-10-01): an install is a
-# COPY at ~/.local/share/bt-sane/{libexec,man,venv}, and ~/.local links only
-# into that, never back into the source tree, which a provisioner re-clones
-# on every sweep and may wipe at any time.
+# COPY at ~/.local/share/bt-sane/{bin,libexec,share,man,venv}, and ~/.local
+# links only into that, never back into the source tree, which a provisioner
+# re-clones on every sweep and may wipe at any time.
 set -eu
 
 PKG=bt-sane
@@ -81,11 +81,17 @@ _payload_stage() {
   _guard_pay || return 1
   rm -rf -- "$_pay.new" "$_pay.old"
   mkdir -p "$_pay.new"
-  for _d in libexec man; do
+  for _d in bin libexec share man; do
     cp -R "$_root/$_d" "$_pay.new/"
   done
-  [ -x "$_pay.new/libexec/bt-le" ] || {
-    echo "$PKG: staged payload has no libexec/bt-le" >&2
+  # DROP BUILD DETRITUS. The repo gitignores __pycache__, so a clean clone has
+  # none, but the venv python RUNS the indicator out of the clone and writes it
+  # there, so a copy ships it. Measured on this box: the deployed payload HAD
+  # one. A payload is what the repo ships, not what running it produced.
+  find "$_pay.new" -name __pycache__ -type d -prune \
+    -exec rm -rf -- {} + 2>/dev/null || :
+  [ -x "$_pay.new/bin/bt-le" ] || {
+    echo "$PKG: staged payload has no bin/bt-le" >&2
     rm -rf -- "$_pay.new"; return 1; }
   if [ -d "$_pay/venv" ] && [ ! -L "$_pay/venv" ]; then
     mv -- "$_pay/venv" "$_pay.new/venv"
@@ -98,7 +104,7 @@ _payload_stage() {
 do_install() {
   mkdir -p "$_bin" "$_shr"
   _payload_stage
-  for _t in $TOOLS; do ln -sfn "$_pay/libexec/$_t" "$_bin/$_t"; done
+  for _t in $TOOLS; do ln -sfn "$_pay/bin/$_t" "$_bin/$_t"; done
   _man_pages | while IFS= read -r _m; do
     _d=$(basename "$(dirname "$_m")")
     mkdir -p "$_man/$_d"
@@ -131,7 +137,7 @@ do_service() {
     return 1; }
   [ -d "$VENV" ] || python3 -m venv "$VENV"
   "$VENV/bin/pip" install -q --upgrade pip
-  "$VENV/bin/pip" install -q -r "$_root/libexec/bt-indicator.reqs"
+  "$VENV/bin/pip" install -q -r "$_root/share/bt-indicator.reqs"
   # A launcher: exec the venv python on the packaged daemon (replaces venv-run;
   # this launcher is the only thing the daemon needs on PATH).
   mkdir -p "$_bin"
@@ -179,12 +185,14 @@ do_uninstall() {
 _check_payload() {
   if [ -L "$_pay" ]; then
     bad "$_pay is a SYMLINK: this install still depends on a source tree"
-  elif [ -x "$_pay/libexec/bt-le" ] && [ -d "$_pay/man" ]; then
+  elif [ -x "$_pay/bin/bt-le" ] && [ -d "$_pay/man" ]; then
     ok "payload is a self-contained tree ($_pay)"
   else bad "no payload tree at $_pay (setup.sh install)"; fi
   for _t in $TOOLS; do
-    if [ "$(readlink "$_bin/$_t" 2>/dev/null)" = "$_pay/libexec/$_t" ]; then
+    if [ "$(readlink "$_bin/$_t" 2>/dev/null)" = "$_pay/bin/$_t" ]; then
       ok "$_t linked into the payload"
+    elif [ "$(readlink "$_bin/$_t" 2>/dev/null)" = "$_pay/libexec/$_t" ]; then
+      bad "$_t links at the pre-FHS payload path (setup.sh install)"
     elif [ "$(readlink "$_bin/$_t" 2>/dev/null)" = "$_root/libexec/$_t" ]; then
       bad "$_t links into the source tree, not the payload (setup.sh install)"
     else bad "$_t not linked ($_bin/$_t)"; fi
@@ -200,13 +208,13 @@ do_check() {
   # not broken. So state is surfaced for whoever does hold the policy, and only
   # `stale` is called out because masked-but-still-running is nobody's
   # intent, it is just a mask that has not taken effect yet.
-  _m=$("$_pay/libexec/bt-mpris" status 2>/dev/null || echo unknown)
+  _m=$("$_pay/bin/bt-mpris" status 2>/dev/null || echo unknown)
   case "$_m" in
     stale) bad "mpris-proxy masked but STILL RUNNING (~1/3 core until the
          session ends; \`bt-mpris off\` stops it now)" ;;
     *)     ok "mpris bridge: $_m" ;;
   esac
-  ok "LE: $("$_pay/libexec/bt-le" status 2>/dev/null || echo unknown)"
+  ok "LE: $("$_pay/bin/bt-le" status 2>/dev/null || echo unknown)"
   for _d in $DEPS; do
     command -v "$_d" >/dev/null 2>&1 && ok "dep $_d present" \
       || warn "dep $_d absent (bluez; the suite needs it)"; done

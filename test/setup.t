@@ -21,9 +21,9 @@ export PREFIX XDG_BIN_HOME XDG_DATA_HOME XDG_CONFIG_HOME HOME
 PAY=$XDG_DATA_HOME/bt-sane
 sh "$HERE/setup.sh" install >/dev/null || fail "install errored"
 [ -d "$PAY" ] && [ ! -L "$PAY" ] || fail "payload is not a real directory"
-[ -L "$PAY/libexec/bt-le" ] && fail "payload holds a link, not a copy" || :
+[ -L "$PAY/bin/bt-le" ] && fail "payload holds a link, not a copy" || :
 for _t in bt-le bt-mpris; do
-  [ "$(readlink "$XDG_BIN_HOME/$_t")" = "$PAY/libexec/$_t" ] \
+  [ "$(readlink "$XDG_BIN_HOME/$_t")" = "$PAY/bin/$_t" ] \
     || fail "$_t link does not point into the payload"
 done
 [ "$(readlink -f "$XDG_DATA_HOME/man/man1/bt-sane.1")" \

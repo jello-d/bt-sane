@@ -14,7 +14,7 @@ _checker() {   # <file> -> the -n syntax check for its shebang
 }
 
 _n=0
-for _f in "$HERE"/setup.sh "$HERE"/test/run "$HERE"/libexec/*; do
+for _f in "$HERE"/setup.sh "$HERE"/test/run "$HERE"/bin/* "$HERE"/libexec/*; do
   [ -f "$_f" ] || continue
   case "$_f" in *.reqs) continue ;; esac   # data, not a script
   _checker "$_f" || fail "parse error in $(basename "$_f")"

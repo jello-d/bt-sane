@@ -19,8 +19,8 @@
 . "$(dirname "$0")/harness_lib"
 harness_init mpris
 
-TOOL=$HERE/libexec/bt-mpris
-[ -x "$TOOL" ] || fail "libexec/bt-mpris missing or not executable"
+TOOL=$HERE/bin/bt-mpris
+[ -x "$TOOL" ] || fail "bin/bt-mpris missing or not executable"
 
 MASK=$T/mpris-proxy.service
 mkdir -p "$T/bin"
