@@ -62,7 +62,7 @@ env PATH="$T/bin:$PATH" MASK="$MASK" "$TOOL" off || fail "bt-mpris off failed"
 [ "$(readlink "$MASK")" = /dev/null ] || fail "off did not mask the unit"
 grep -q 'systemctl --user stop' "$TOOL" \
   || fail "off masks but never stops a live instance, so the busy-loop keeps
-running until the session ends -- which is the case this tool exists for"
+running until the session ends, which is the case this tool exists for"
 env PATH="$T/bin:$PATH" MASK="$MASK" "$TOOL" on || fail "bt-mpris on failed"
 [ -e "$MASK" ] && fail "on did not remove the mask" || :
 
