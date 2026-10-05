@@ -10,7 +10,7 @@ subscribes to PropertiesChanged ONLY on the adapter + paired-device paths
 device advertisement flood, so it sits at ~0% CPU even while Chrome holds an LE
 scan for passkeys (measured 0.00% idle, vs ~7% for blueman-applet). A slow
 re-enum (30s) catches pairing/unpairing. Clicks: LEFT connects/disconnects the
-primary device; MIDDLE toggles Bluetooth LE (off by default, on for a passkey --
+primary device; MIDDLE toggles Bluetooth LE (off by default, on for a passkey,
 through the root bt-le helper, a narrow NOPASSWD grant); RIGHT opens blueman-
 manager. An amber top-left dot marks LE temporarily enabled.
 
@@ -173,7 +173,7 @@ OM_IFACE = "org.freedesktop.DBus.ObjectManager"
 async def read_state(om):
     """Return (state, pct, alias, primary_path, watch_paths). One
     GetManagedObjects call on a CACHED ObjectManager proxy. watch_paths is the
-    adapter + every PAIRED device path -- the only paths we subscribe to, so we
+    adapter + every PAIRED device path, the only paths we subscribe to, so we
     never touch the transient-device advertisement flood."""
     if om is None:
         return ("off", None, "", None, set())
