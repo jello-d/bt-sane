@@ -9,10 +9,11 @@ subscribes to PropertiesChanged ONLY on the adapter + paired-device paths
 (path-scoped). It never runs discovery and never subscribes to the transient-
 device advertisement flood, so it sits at ~0% CPU even while Chrome holds an LE
 scan for passkeys (measured 0.00% idle, vs ~7% for blueman-applet). A slow
-re-enum (30s) catches pairing/unpairing. Clicks: LEFT connects/disconnects the
-primary device; MIDDLE toggles Bluetooth LE (off by default, on for a passkey,
-through the root bt-le helper, a narrow NOPASSWD grant); RIGHT opens blueman-
-manager. An amber top-left dot marks LE temporarily enabled.
+re-enum (30s) catches pairing/unpairing. Clicks: LEFT and RIGHT open
+blueman-manager (Bluetooth settings); MIDDLE toggles Bluetooth LE (off by
+default, on for a passkey, through the root bt-le helper, a narrow NOPASSWD
+grant). There is no click-to-connect: a trusted headset reconnects itself when
+it powers on. An amber top-left dot marks LE temporarily enabled.
 
 Deps: dbus-next + Pillow. BlueZ is on the SYSTEM bus; SNI on the SESSION bus.
 `bt-indicator render-test DIR` dumps preview PNGs (no D-Bus).
@@ -171,21 +172,19 @@ OM_IFACE = "org.freedesktop.DBus.ObjectManager"
 
 
 async def read_state(om):
-    """Return (state, pct, alias, primary_path, watch_paths). One
+    """Return (state, pct, alias, watch_paths). One
     GetManagedObjects call on a CACHED ObjectManager proxy. watch_paths is the
     adapter + every PAIRED device path, the only paths we subscribe to, so we
     never touch the transient-device advertisement flood."""
     if om is None:
-        return ("off", None, "", None, set())
+        return ("off", None, "", set())
     try:
         managed = await om.call_get_managed_objects()
     except Exception:
-        return ("off", None, "", None, set())
+        return ("off", None, "", set())
     have_adapter = powered = connected = False
     pct = None
     alias = ""
-    primary = None
-    first_paired = None
     watch = set()
     for path, ifaces in managed.items():
         if "org.bluez.Adapter1" in ifaces:
@@ -199,39 +198,19 @@ async def read_state(om):
             paired = dev.get("Paired")
             if paired is not None and paired.value:
                 watch.add(path)
-                if first_paired is None:
-                    first_paired = path
             conn = dev.get("Connected")
             if conn is not None and conn.value:
                 connected = True
-                primary = path
                 a = dev.get("Alias")
                 alias = a.value if a is not None else ""
                 bat = ifaces.get("org.bluez.Battery1")
                 if bat is not None and "Percentage" in bat:
                     pct = int(bat["Percentage"].value)
     if not have_adapter or not powered:
-        return ("off", None, "", None, watch)
+        return ("off", None, "", watch)
     if connected:
-        return ("connected", pct, alias, primary, watch)
-    return ("on", None, "", first_paired, watch)
-
-
-async def toggle(sysbus, state, path):
-    """Left-click action: disconnect the connected device, else connect the
-    first paired one."""
-    if path is None:
-        return
-    try:
-        intro = await sysbus.introspect(BLUEZ, path)
-        dev = sysbus.get_proxy_object(BLUEZ, path, intro) \
-            .get_interface("org.bluez.Device1")
-        if state == "connected":
-            await dev.call_disconnect()
-        else:
-            await dev.call_connect()
-    except Exception as e:
-        print(f"bt-indicator: toggle failed: {e}", flush=True)
+        return ("connected", pct, alias, watch)
+    return ("on", None, "", watch)
 
 
 def main():
@@ -295,14 +274,12 @@ async def run():
             self._state = "off"
             self._pct = None
             self._alias = ""
-            self._path = None
             self._le = False
             self._toggling = False
             self._pixmap = icon_pixmap(self._state, self._pct, self._le)
 
-        def set(self, state, pct, alias, path):
-            self._state, self._pct = state, pct
-            self._alias, self._path = alias, path
+        def set(self, state, pct, alias):
+            self._state, self._pct, self._alias = state, pct, alias
             self._pixmap = icon_pixmap(state, pct, self._le)
             self.NewIcon()
             self.NewStatus(self._status())
@@ -374,8 +351,8 @@ async def run():
 
         @method()
         def Activate(self, x: "i", y: "i"):
-            # Left-click: connect/disconnect the primary paired device.
-            asyncio.get_event_loop().create_task(self._do())
+            # Left-click: open Bluetooth settings, as a stock tray does.
+            asyncio.get_event_loop().create_task(spawn("blueman-manager"))
 
         @method()
         def SecondaryActivate(self, x: "i", y: "i"):
@@ -385,16 +362,12 @@ async def run():
         @method()
         def ContextMenu(self, x: "i", y: "i"):
             # Right-click (waybar calls ContextMenu when there is no dbusmenu):
-            # open blueman-manager for pairing.
+            # the same settings window, so no button is a dead click.
             asyncio.get_event_loop().create_task(spawn("blueman-manager"))
 
         @method()
         def Scroll(self, delta: "i", orientation: "s"):
             pass
-
-        async def _do(self):
-            await toggle(sysbus, self._state, self._path)
-            await refresh(self)
 
         async def _toggle_le(self):
             # on/off rewrite main.conf + restart bluetoothd (~1-2s). Keep the
@@ -460,11 +433,11 @@ async def run():
             item.set_le(le)             # keep the LE dot honest (cheap read)
         if item._toggling:
             return  # freeze connection state across the toggle restart
-        st, pct, alias, path, watch = await read_state(om)
+        st, pct, alias, watch = await read_state(om)
         for p in watch:
             await subscribe(p)          # pick up newly-paired devices
-        if (st, pct, path) != (item._state, item._pct, item._path):
-            item.set(st, pct, alias, path)
+        if (st, pct, alias) != (item._state, item._pct, item._alias):
+            item.set(st, pct, alias)
             print(f"bt-indicator: {st} {alias} {pct}", flush=True)
 
     async def reenum(item):

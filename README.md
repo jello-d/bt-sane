@@ -9,8 +9,10 @@ CPU-hungry blueman-applet, plus an LE/passkey **toggle**. A suite of tools on
 - **bt-indicator**: a passive StatusNotifierItem tray icon. It reads BlueZ once
   on the system bus and subscribes to `PropertiesChanged` only on the adapter +
   paired devices (never the LE advertisement flood), so it sits at ~0% idle.
-  Left-click connects/disconnects, middle-click toggles LE (via `bt-le`),
-  right-click opens `blueman-manager`. Runs as a `--user` systemd daemon.
+  Left- and right-click open `blueman-manager` (Bluetooth settings),
+  middle-click toggles LE (via `bt-le`). No click-to-connect: a paired, trusted
+  headset reconnects itself when it powers on. Runs as a `--user` systemd
+  daemon.
 - **bt-le**: `bt-le on|off|status` flips the BlueZ `ControllerMode` between
   `dual` (LE on) and `bredr` (classic only), restarting bluetoothd. `status` is
   world-readable; `on`/`off` edit `/etc/bluetooth/main.conf` and need root.
@@ -35,7 +37,7 @@ Honors `PREFIX` (default `~/.local`) and the `XDG_*` vars. `install` links
 Python/dbus daemon) is the opt-in `service` verb. It builds its own venv
 (`dbus-next` + `Pillow`), no `venv-run` dependency. Runtime deps: `bluez`
 (bluetoothd),
-`blueman` (the right-click manager, soft), `python3` (for the tray).
+`blueman` (the settings window the clicks open, soft), `python3` (for the tray).
 
 ## Integration seams
 
