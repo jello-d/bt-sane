@@ -288,6 +288,7 @@ async def run():
             self._state, self._pct, self._alias = state, pct, alias
             self._pixmap = icon_pixmap(state, pct, self._le)
             self.NewIcon()
+            self.NewToolTip()
             self.NewStatus(self._status())
 
         def set_le(self, le):
@@ -296,6 +297,7 @@ async def run():
             self._le = le
             self._pixmap = icon_pixmap(self._state, self._pct, le)
             self.NewIcon()
+            self.NewToolTip()
 
         def _status(self):
             # Always Active: the tile never hides, so the tray width is constant
@@ -408,6 +410,13 @@ async def run():
 
         @signal()
         def NewIcon(self):
+            pass
+
+        @signal()
+        def NewToolTip(self):
+            # A host refetches ONLY the properties a signal names (waybar maps
+            # NewIcon to IconName/IconPixmap), so without this the hover text
+            # stays whatever it read at registration.
             pass
 
         @signal()
