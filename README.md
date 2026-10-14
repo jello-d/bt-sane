@@ -11,8 +11,8 @@ CPU-hungry blueman-applet, plus an LE/passkey **toggle**. A suite of tools on
   paired devices (never the LE advertisement flood), so it sits at ~0% idle.
   Left- and right-click open `blueman-manager` (Bluetooth settings),
   middle-click toggles LE (via `bt-le`). No click-to-connect: a paired, trusted
-  headset reconnects itself when it powers on. Runs as a `--user` systemd
-  daemon.
+  headset reconnects itself when it powers on. Toasts each device connecting
+  or disconnecting. Runs as a `--user` systemd daemon.
 - **bt-le**: `bt-le on|off|status` flips the BlueZ `ControllerMode` between
   `dual` (LE on) and `bredr` (classic only), restarting bluetoothd. `status` is
   world-readable; `on`/`off` edit `/etc/bluetooth/main.conf` and need root.

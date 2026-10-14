@@ -13,7 +13,9 @@ re-enum (30s) catches pairing/unpairing. Clicks: LEFT and RIGHT open
 blueman-manager (Bluetooth settings); MIDDLE toggles Bluetooth LE (off by
 default, on for a passkey, through the root bt-le helper, a narrow NOPASSWD
 grant). There is no click-to-connect: a trusted headset reconnects itself when
-it powers on. An amber top-left dot marks LE temporarily enabled.
+it powers on. An amber top-left dot marks LE temporarily enabled. A desktop
+toast (org.freedesktop.Notifications) announces each device connecting or
+disconnecting, the job blueman-applet did before this replaced it.
 
 Deps: dbus-next + Pillow. BlueZ is on the SYSTEM bus; SNI on the SESSION bus.
 `bt-indicator render-test DIR` dumps preview PNGs (no D-Bus).
@@ -172,20 +174,22 @@ OM_IFACE = "org.freedesktop.DBus.ObjectManager"
 
 
 async def read_state(om):
-    """Return (state, pct, alias, watch_paths). One
+    """Return (state, pct, alias, watch_paths, conns). One
     GetManagedObjects call on a CACHED ObjectManager proxy. watch_paths is the
     adapter + every PAIRED device path, the only paths we subscribe to, so we
-    never touch the transient-device advertisement flood."""
+    never touch the transient-device advertisement flood. conns maps each
+    CONNECTED device path to its alias, which is what the toasts diff."""
     if om is None:
-        return ("off", None, "", set())
+        return ("off", None, "", set(), {})
     try:
         managed = await om.call_get_managed_objects()
     except Exception:
-        return ("off", None, "", set())
+        return ("off", None, "", set(), {})
     have_adapter = powered = connected = False
     pct = None
     alias = ""
     watch = set()
+    conns = {}
     for path, ifaces in managed.items():
         if "org.bluez.Adapter1" in ifaces:
             have_adapter = True
@@ -203,14 +207,15 @@ async def read_state(om):
                 connected = True
                 a = dev.get("Alias")
                 alias = a.value if a is not None else ""
+                conns[path] = alias or path.rsplit("/", 1)[-1]
                 bat = ifaces.get("org.bluez.Battery1")
                 if bat is not None and "Percentage" in bat:
                     pct = int(bat["Percentage"].value)
     if not have_adapter or not powered:
-        return ("off", None, "", watch)
+        return ("off", None, "", watch, conns)
     if connected:
-        return ("connected", pct, alias, watch)
-    return ("on", None, "", watch)
+        return ("connected", pct, alias, watch, conns)
+    return ("on", None, "", watch, conns)
 
 
 def main():
@@ -274,6 +279,7 @@ async def run():
             self._state = "off"
             self._pct = None
             self._alias = ""
+            self._conns = None          # connected path -> alias, last read
             self._le = False
             self._toggling = False
             self._pixmap = icon_pixmap(self._state, self._pct, self._le)
@@ -408,6 +414,31 @@ async def run():
         def NewStatus(self, status) -> "s":
             return status
 
+    toasts = {}         # device path -> notification id, so a disconnect
+                        # REPLACES its connect toast rather than stacking
+    notifier = []       # the Notifications proxy, fetched once on first use
+
+    async def toast(path, summary, body, icon):
+        try:
+            if not notifier:
+                n = "org.freedesktop.Notifications"
+                p = "/org/freedesktop/Notifications"
+                intro = await bus.introspect(n, p)
+                notifier.append(bus.get_proxy_object(n, p, intro)
+                                .get_interface(n))
+            toasts[path] = await notifier[0].call_notify(
+                "bt-indicator", toasts.get(path, 0), icon, summary, body,
+                [], {}, -1)
+        except Exception as e:
+            print(f"bt-indicator: toast {summary}: {e}", flush=True)
+
+    async def announce(old, new):
+        for p in new.keys() - old.keys():
+            await toast(p, "Bluetooth connected", new[p], "bluetooth-active")
+        for p in old.keys() - new.keys():
+            await toast(p, "Bluetooth disconnected", old[p],
+                        "bluetooth-disabled")
+
     subscribed = set()
 
     async def subscribe(path):
@@ -433,9 +464,12 @@ async def run():
             item.set_le(le)             # keep the LE dot honest (cheap read)
         if item._toggling:
             return  # freeze connection state across the toggle restart
-        st, pct, alias, watch = await read_state(om)
+        st, pct, alias, watch, conns = await read_state(om)
         for p in watch:
             await subscribe(p)          # pick up newly-paired devices
+        old, item._conns = item._conns, conns
+        if old is not None:             # None = first read: prime, no toasts
+            await announce(old, conns)
         if (st, pct, alias) != (item._state, item._pct, item._alias):
             item.set(st, pct, alias)
             print(f"bt-indicator: {st} {alias} {pct}", flush=True)
